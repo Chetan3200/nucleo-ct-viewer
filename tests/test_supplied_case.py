@@ -1,22 +1,81 @@
-"""Local data smoke test; skipped when the assignment files are not distributed."""
-from pathlib import Path
+"""Local data smoke tests; skipped when the configured assignment files are absent."""
 from io import BytesIO
+import os
+from pathlib import Path
 
+from dotenv import get_key
 import httpx
 from PIL import Image
 import numpy as np
 import pytest
 
+from nucleo_viewer.app import ROOT, Settings, create_app
 from nucleo_viewer.imaging import load_dicom_zip, load_mask, render_slice, validate_mask_geometry
-from nucleo_viewer.app import create_app, Settings
 
-DATA = Path(__file__).resolve().parent.parent / "Take-home case-001"
+ZIP_NAME = "case-001-dicom.zip"
+REFERENCE_NAME = "case-001-reference-lesions.nii.gz"
+DEFAULT_DATA = ROOT / "Take-home case-001"
+DOTENV_PATH = ROOT / ".env"
 
 
-@pytest.mark.skipif(not (DATA / "case-001-dicom.zip").is_file(), reason="Supplied assignment data is not in this checkout")
+def configured_data_dir(environ=None, dotenv_path=DOTENV_PATH):
+    """Match startup precedence while only reading the data-folder key from .env."""
+    environ = os.environ if environ is None else environ
+    configured = environ.get("NUCLEO_DATA_DIR")
+    if configured is not None:
+        return Path(configured)
+    if dotenv_path.is_file():
+        configured = get_key(str(dotenv_path), "NUCLEO_DATA_DIR")
+        if configured is not None:
+            return Path(configured)
+    return DEFAULT_DATA
+
+
+def supplied_files_available(data_dir):
+    return (data_dir / ZIP_NAME).is_file() and (data_dir / REFERENCE_NAME).is_file()
+
+
+DATA = configured_data_dir()
+SUPPLIED_FILES_AVAILABLE = supplied_files_available(DATA)
+SKIP_SUPPLIED_DATA = pytest.mark.skipif(
+    not SUPPLIED_FILES_AVAILABLE,
+    reason="Supplied ZIP and reference files are not both present in the configured data folder",
+)
+
+
+def test_settings_data_dir_defaults_to_repo_folder(monkeypatch, tmp_path):
+    monkeypatch.delenv("NUCLEO_DATA_DIR", raising=False)
+    assert Settings().data_dir == DEFAULT_DATA
+    assert configured_data_dir({}, tmp_path / ".env") == DEFAULT_DATA
+
+
+def test_configured_data_dir_reads_dotenv_without_loading_other_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("NUCLEO_API_TOKEN", "existing-test-token")
+    configured = tmp_path / "configured-case"
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(f"NUCLEO_DATA_DIR={configured}\nNUCLEO_API_TOKEN=dummy-token\n")
+
+    assert configured_data_dir({}, dotenv_path) == configured
+    assert os.environ["NUCLEO_API_TOKEN"] == "existing-test-token"
+
+
+def test_environment_data_dir_takes_precedence_over_dotenv(tmp_path):
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("NUCLEO_DATA_DIR=/from-dotenv\n")
+
+    assert configured_data_dir({"NUCLEO_DATA_DIR": "/from-environment"}, dotenv_path) == Path("/from-environment")
+
+
+@pytest.mark.parametrize("present", [ZIP_NAME, REFERENCE_NAME])
+def test_supplied_files_require_both_zip_and_reference(tmp_path, present):
+    (tmp_path / present).touch()
+    assert not supplied_files_available(tmp_path)
+
+
+@SKIP_SUPPLIED_DATA
 def test_supplied_ct_and_reference_share_physical_geometry():
-    ct = load_dicom_zip((DATA / "case-001-dicom.zip").read_bytes())
-    reference = load_mask((DATA / "case-001-reference-lesions.nii.gz").read_bytes())
+    ct = load_dicom_zip((DATA / ZIP_NAME).read_bytes())
+    reference = load_mask((DATA / REFERENCE_NAME).read_bytes())
     assert ct.shape == (416, 350, 180)
     assert reference.data.shape == ct.shape
     np.testing.assert_allclose(ct.affine, reference.affine, atol=1e-4, rtol=0)
@@ -28,7 +87,7 @@ def test_supplied_ct_and_reference_share_physical_geometry():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not (DATA / "case-001-dicom.zip").is_file(), reason="Supplied assignment data is not in this checkout")
+@SKIP_SUPPLIED_DATA
 async def test_actual_supplied_reference_renders_before_any_analysis():
     def reject_external_request(request):
         raise AssertionError("Reference display must not need the segmentation service")
@@ -36,7 +95,7 @@ async def test_actual_supplied_reference_renders_before_any_analysis():
     app = create_app(Settings(data_dir=DATA, token=""), transport=httpx.MockTransport(reject_external_request))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
-            uploaded = await client.post("/api/cases", content=(DATA / "case-001-dicom.zip").read_bytes(), headers={"Content-Type": "application/zip"})
+            uploaded = await client.post("/api/cases", content=(DATA / ZIP_NAME).read_bytes(), headers={"Content-Type": "application/zip"})
             assert uploaded.status_code == 200
             case = uploaded.json()
             assert case["reference_available"] is True

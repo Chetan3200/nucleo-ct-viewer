@@ -48,6 +48,8 @@ Restart after configuration or Python backend changes, then refresh the browser 
 4. Toggle each returned structure and the separately coloured reference. All available overlays start enabled after success.
 5. Another case can be loaded while analysis is pending. The latest selection owns the screen; older results and errors cannot overwrite it.
 
+While a new slice or overlay image loads, the previous image is hidden. A failed image request shows an error instead of stale pixels. An expired case clears the viewer and must be reloaded.
+
 Before analysis, the app identifies the supplied archive by the SHA-256 hash of its ZIP bytes, independently of its filename. Matching dimensions alone never attach a reference to an unrelated scan. Repacked or changed ZIPs can receive the reference after the API identifies them as `case-001`, subject to geometry validation. An attached local reference remains available during analysis and after a failed analysis; model overlays and Dice require a successful analysis.
 
 ## Code map and async design
@@ -96,13 +98,13 @@ After setup:
 
 ```bash
 uv run --locked pytest -q
-node --test tests/ui_state.test.mjs
+node --test tests/*.test.mjs
 ```
 
 Node is only required for the JavaScript tests. The Python suite covers corrupt uploads and recovery, geometry and overlay alignment, Dice edge cases, authentication and raw ZIP requests, retries, malformed responses, reference-overlay lifecycle and concurrent analyses. HTTP tests use mocks and do not call the shared segmentation service.
 
-- **Python:** 64 tests passed with the supplied data available. The two supplied-data tests read the default `Take-home case-001/` directory, independently of `NUCLEO_DATA_DIR`, and require both imaging files. When the default-folder ZIP is absent, 62 tests pass and those two tests skip.
-- **JavaScript:** 5 tests passed, covering stale-response and UI-state handling.
+- **Python:** 69 tests passed, including both supplied-data tests. These use `NUCLEO_DATA_DIR` from the environment, then `.env`, or the default `Take-home case-001/` folder. They skip if either required imaging file is absent.
+- **JavaScript:** 14 tests passed, covering race guards and the actual viewer's image-request failure handling, retry recovery, expired-case reset and stale-response isolation. Viewer tests use lightweight DOM, network and image-decoder doubles without additional dependencies.
 - **Supplied-case live result:** analysis completed with both model and reference overlays available, and a displayed 3D Dice score of **0.928**. This is a single-case result, not a general model-accuracy estimate.
 
 ## Limitations

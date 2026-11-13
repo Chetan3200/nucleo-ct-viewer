@@ -14,6 +14,7 @@ const ui = {
 const view = { caseId: null, sliceCount: 0, sliceIndex: 0, structures: [], referenceAvailable: false, selection: 0, analyzing: false, status: 'ready' };
 let imageController = null;
 let displayedUrl = null;
+let imageErrorMessage = null;
 let wheelTimer = null;
 let pendingWheelIndex = null;
 let pollTimer = null;
@@ -23,15 +24,16 @@ function setStatus(message, isError = false) {
   ui.progress.textContent = message || 'Working…';
   ui.dot.classList.toggle('error', isError);
 }
-function clearImage() {
+function clearImage(message = 'Load a CT case to begin review') {
   if (imageController) imageController.abort();
   imageController = null;
   if (displayedUrl) URL.revokeObjectURL(displayedUrl);
   displayedUrl = null;
-  ui.image.removeAttribute('src'); ui.image.hidden = true; ui.empty.hidden = false; ui.viewport.setAttribute('aria-busy', 'false');
+  ui.image.removeAttribute('src'); ui.image.hidden = true; ui.empty.textContent = message; ui.empty.hidden = false; ui.viewport.setAttribute('aria-busy', 'false');
 }
 function resetSelection() {
   view.caseId = null; view.sliceCount = 0; view.sliceIndex = 0; view.structures = []; view.referenceAvailable = false; view.analyzing = false; view.status = 'ready';
+  imageErrorMessage = null;
   if (pollTimer) clearTimeout(pollTimer); pollTimer = null;
   if (wheelTimer) clearTimeout(wheelTimer); wheelTimer = null; pendingWheelIndex = null;
   clearImage();
@@ -101,7 +103,8 @@ async function requestSlice(index) {
   const clamped = Math.max(0, Math.min(view.sliceCount - 1, Math.trunc(index)));
   view.sliceIndex = clamped; ui.slider.value = String(clamped); ui.number.value = String(clamped); ui.sliceReadout.textContent = `${clamped} / ${view.sliceCount - 1}`;
   const ticket = guards.beginImage(selection);
-  if (imageController) imageController.abort();
+  // Controls describe the requested image, so do not leave older pixels visible.
+  clearImage('Loading image slice…');
   const controller = new AbortController(); imageController = controller;
   const query = new URLSearchParams();
   const structures = selectedStructures(); if (structures.length) query.set('structures', structures.join(',')); if (ui.reference.checked) query.set('reference', 'true');
@@ -110,15 +113,35 @@ async function requestSlice(index) {
   try {
     const suffix = query.toString() ? `?${query}` : '';
     const response = await fetch(`/api/cases/${encodeURIComponent(view.caseId)}/slice/${clamped}${suffix}`, { signal: controller.signal });
-    if (!response.ok) { let payload = null; try { payload = await response.json(); } catch {} throw new Error(errorFromResponse(payload, `Could not load slice (${response.status}).`)); }
+    if (!response.ok) {
+      let payload = null; try { payload = await response.json(); } catch {}
+      const error = new Error(errorFromResponse(payload, `Could not load slice (${response.status}).`));
+      error.code = payload?.error?.code;
+      throw error;
+    }
     const blob = await response.blob(); objectUrl = URL.createObjectURL(blob);
     const decoder = new Image(); decoder.src = objectUrl; await decoder.decode();
     if (!guards.isCurrentImage(ticket) || controller.signal.aborted) return;
     if (displayedUrl) URL.revokeObjectURL(displayedUrl);
     displayedUrl = objectUrl; objectUrl = null;
     ui.image.src = displayedUrl; ui.image.hidden = false; ui.empty.hidden = true;
+    // A successful retry clears only its own error, not an unrelated analysis status.
+    if (imageErrorMessage && ui.progress.textContent === imageErrorMessage) {
+      setStatus(view.analyzing ? 'Analysis is in progress.' : 'Image slice loaded.');
+    }
+    imageErrorMessage = null;
   } catch (error) {
-    if (!controller.signal.aborted && guards.isCurrentImage(ticket)) setStatus(error.message || 'Could not load image slice.', true);
+    if (!controller.signal.aborted && guards.isCurrentImage(ticket)) {
+      if (error.code === 'case_expired') {
+        view.selection = guards.beginSelection();
+        resetSelection();
+        ui.empty.textContent = 'This scan is no longer loaded. Please load it again.';
+      } else {
+        clearImage('Could not load this image slice. Try again.');
+      }
+      imageErrorMessage = error.message || 'Could not load image slice.';
+      setStatus(imageErrorMessage, true);
+    }
   } finally {
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     if (guards.isCurrentImage(ticket)) ui.viewport.setAttribute('aria-busy', 'false');
