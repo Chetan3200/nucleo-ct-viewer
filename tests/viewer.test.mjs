@@ -52,7 +52,7 @@ function harness() {
     .map(([, selector]) => [selector, element()]));
   const pending = [], created = [], revoked = [], timers = new Map();
   let nextTimer = 0;
-  const decoder = { fail: false };
+  const decoder = { fail: false, wait: null };
   const fetch = (url, options = {}) => {
     if (url === '/api/config') return Promise.resolve(json({ sample_available: true, token_configured: true }));
     const request = deferred(); pending.push({ url, options, ...request }); return request.promise;
@@ -67,7 +67,7 @@ function harness() {
       createObjectURL() { const url = `blob:test-${created.length}`; created.push(url); return url; },
       revokeObjectURL(url) { revoked.push(url); },
     },
-    Image: class { async decode() { if (decoder.fail) throw new Error('Image decoding failed.'); } },
+    Image: class { async decode() { if (decoder.wait) await decoder.wait; if (decoder.fail) throw new Error('Image decoding failed.'); } },
     setTimeout(fn) { const id = ++nextTimer; timers.set(id, fn); return id; },
     clearTimeout(id) { timers.delete(id); },
   });
@@ -92,13 +92,15 @@ function assertNoImage(h) {
   assert.equal(h.node('viewport').getAttribute('aria-busy'), 'false');
 }
 
-test('requestSlice hides the previous image while loading and after a current HTTP failure', async () => {
+test('requestSlice keeps the previous image while loading but clears it on a current HTTP failure', async () => {
   const h = harness(); await h.load();
   const oldUrl = h.node('ct-image').src;
   const loading = h.api.requestSlice(91);
   assert.equal(h.node('slice-number').value, '91');
-  assert.equal(h.node('ct-image').hidden, true);
-  assert.equal(h.node('empty-viewport').textContent, 'Loading image slice…');
+  assert.equal(h.node('ct-image').hidden, false);
+  assert.equal(h.node('ct-image').src, oldUrl);
+  assert.equal(h.node('empty-viewport').hidden, true);
+  assert.ok(!h.revoked.includes(oldUrl));
   assert.equal(h.node('viewport').getAttribute('aria-busy'), 'true');
   h.pending.shift().resolve(json({ error: { code: 'internal', message: 'Rendering failed.' } }, 500));
   await loading;
@@ -108,6 +110,25 @@ test('requestSlice hides the previous image while loading and after a current HT
   assert.equal(h.node('slice-number').disabled, false);
   assert.equal(h.node('reference-overlay').checked, true);
   assert.ok(h.revoked.includes(oldUrl));
+});
+
+test('slice navigation swaps images only after the replacement has decoded', async () => {
+  const h = harness(); await h.load();
+  const oldUrl = h.node('ct-image').src, decoded = deferred();
+  h.decoder.wait = decoded.promise;
+  const loading = h.api.requestSlice(91);
+  h.pending.shift().resolve(imageResponse());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.node('ct-image').src, oldUrl);
+  assert.equal(h.node('ct-image').hidden, false);
+  assert.equal(h.node('empty-viewport').hidden, true);
+  assert.ok(!h.revoked.includes(oldUrl));
+  decoded.resolve(); await loading;
+  assert.notEqual(h.node('ct-image').src, oldUrl);
+  assert.equal(h.node('ct-image').hidden, false);
+  assert.equal(h.node('empty-viewport').hidden, true);
+  assert.ok(h.revoked.includes(oldUrl));
+  assert.equal(h.node('viewport').getAttribute('aria-busy'), 'false');
 });
 
 test('failed reference-toggle request does not retain reference-containing pixels; retry recovers', async () => {

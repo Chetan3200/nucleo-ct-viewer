@@ -103,8 +103,8 @@ async function requestSlice(index) {
   const clamped = Math.max(0, Math.min(view.sliceCount - 1, Math.trunc(index)));
   view.sliceIndex = clamped; ui.slider.value = String(clamped); ui.number.value = String(clamped); ui.sliceReadout.textContent = `${clamped} / ${view.sliceCount - 1}`;
   const ticket = guards.beginImage(selection);
-  // Controls describe the requested image, so do not leave older pixels visible.
-  clearImage('Loading image slice…');
+  // Keep the last successful image visible until its replacement is decoded.
+  if (imageController) imageController.abort();
   const controller = new AbortController(); imageController = controller;
   const query = new URLSearchParams();
   const structures = selectedStructures(); if (structures.length) query.set('structures', structures.join(',')); if (ui.reference.checked) query.set('reference', 'true');
