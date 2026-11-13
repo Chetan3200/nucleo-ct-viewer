@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nucleo CT Viewer</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">NUCLEO · CASE REVIEW</p>
+        <h1>CT lesion viewer</h1>
+      </div>
+      <p id="connection-status" class="connection" aria-live="polite">Checking server configuration…</p>
+    </header>
+
+    <section class="workspace" aria-label="CT viewer workspace">
+      <aside class="control-panel">
+        <section class="panel-section">
+          <h2>Case</h2>
+          <label class="file-picker" for="case-file">
+            <span>Choose CT ZIP</span>
+            <input id="case-file" type="file" accept=".zip,application/zip" aria-describedby="file-help">
+          </label>
+          <p id="file-help" class="help">Upload a ZIP containing the CT study.</p>
+          <p id="file-name" class="file-name">No file selected</p>
+          <button id="load-sample" class="button button-secondary" type="button">Load supplied case</button>
+        </section>
+
+        <section class="panel-section">
+          <h2>Analysis</h2>
+          <button id="analyze" class="button button-primary" type="button" disabled>Analyze</button>
+          <p id="analysis-help" class="help">Load a case before requesting model overlays.</p>
+          <dl class="case-details" aria-label="Current case details">
+            <div><dt>Study</dt><dd id="case-id">—</dd></div>
+            <div><dt>Volume</dt><dd id="case-dimensions">—</dd></div>
+            <div><dt>Slice</dt><dd id="slice-readout">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="panel-section overlays-section" aria-labelledby="overlay-title">
+          <h2 id="overlay-title">Overlays</h2>
+          <div id="model-overlays" class="overlay-list"><p class="empty-state">Run analysis to view model overlays.</p></div>
+          <label class="overlay-row reference-row">
+            <input id="reference-overlay" type="checkbox" disabled>
+            <span class="swatch reference-swatch" aria-hidden="true"></span>
+            <span>Reference annotation</span>
+          </label>
+        </section>
+
+        <section class="panel-section metric-section" aria-labelledby="dice-title">
+          <h2 id="dice-title">Dice</h2>
+          <p id="dice-value" class="dice-value">—</p>
+          <p id="dice-note" class="help">Available when model and reference annotations are present.</p>
+        </section>
+      </aside>
+
+      <section class="viewer-panel" aria-labelledby="viewer-title">
+        <div class="viewer-head">
+          <div>
+            <p class="eyebrow">AXIAL</p>
+            <h2 id="viewer-title">Image review</h2>
+          </div>
+          <p class="window-label">W 400 · L 40</p>
+        </div>
+        <div class="viewport-wrap">
+          <div id="viewport" class="viewport" aria-busy="false">
+            <img id="ct-image" alt="CT axial slice" hidden>
+            <p id="empty-viewport" class="empty-viewport">Load a CT case to begin review</p>
+            <div class="orientation orientation-top">A</div>
+            <div class="orientation orientation-bottom">P</div>
+            <div class="orientation orientation-left">R</div>
+            <div class="orientation orientation-right">L</div>
+          </div>
+        </div>
+        <div class="slice-controls">
+          <label for="slice-slider">Axial slice</label>
+          <input id="slice-slider" type="range" min="0" max="0" value="0" disabled>
+          <input id="slice-number" class="slice-number" type="number" min="0" max="0" value="0" disabled aria-label="Axial slice number">
+          <span id="slice-total">/ —</span>
+        </div>
+        <div class="status-line" role="status" aria-live="polite">
+          <span id="status-dot" class="status-dot" aria-hidden="true"></span>
+          <span id="progress">Ready to load a case.</span>
+        </div>
+        <p class="notice">Model overlays are research output, not a medical diagnosis. Do not use this viewer for clinical decisions.</p>
+      </section>
+    </section>
+  </main>
+  <script type="module" src="/static/viewer.js"></script>
+</body>
+</html>

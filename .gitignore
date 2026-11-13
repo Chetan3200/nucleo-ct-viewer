@@ -1,0 +1,13 @@
+.venv/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.DS_Store
+Take-home case-001/
+*.dcm
+*.nii
+*.nii.gz
+*.zip
