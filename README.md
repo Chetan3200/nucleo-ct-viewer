@@ -1,6 +1,8 @@
 # Nucleo CT viewer
 
-A local CT and segmentation-comparison viewer built with Python, FastAPI and plain JavaScript. This is research/demo software, not a clinical tool or diagnosis.
+A local axial CT viewer built with Python, FastAPI and plain JavaScript. It displays API-generated segmentation masks alongside a supplied reference mask and calculates their 3D Dice score.
+
+This is research/demo software, not a clinical tool.
 
 ## Setup and run
 
@@ -11,7 +13,19 @@ uv sync --locked
 cp .env.example .env
 ```
 
-Edit `.env` and set `NUCLEO_API_TOKEN` to your personal token. Never commit it or put it in browser code. Then launch with one command:
+Set `NUCLEO_API_TOKEN` in `.env` to enable segmentation. The token is used only by the Python backend and is not exposed to browser code.
+
+Place the supplied imaging files in the following directory, or set `NUCLEO_DATA_DIR` in `.env` to their folder:
+
+```text
+Take-home case-001/
+├── case-001-dicom.zip
+└── case-001-reference-lesions.nii.gz
+```
+
+The imaging files and `.env` are excluded from Git. A manually selected DICOM ZIP can also be viewed without the supplied files.
+
+Start the app:
 
 ```bash
 uv run --locked python -m nucleo_viewer
@@ -26,17 +40,15 @@ Open <http://127.0.0.1:8000>. Stop with Ctrl+C. Configuration:
 
 Restart after configuration or Python backend changes, then refresh the browser and reload the CT. The app binds to loopback; use one worker because cases are stored in memory.
 
-By default, the supplied files should be in `Take-home case-001/`: `case-001-dicom.zip` and `case-001-reference-lesions.nii.gz`. The original files are unchanged and excluded from Git, along with `.env`. A reviewer must supply these files or configure their location. ZIP selection also works without the bundled sample.
+## Usage
 
-## Use
-
-1. Load the supplied case or choose its DICOM ZIP. The local reference overlay is enabled immediately, without analysis or an API token.
+1. Load the supplied case or select a supported DICOM ZIP. When both supplied files are configured and the selected ZIP matches the supplied archive, the reference overlay is enabled immediately, without analysis or an API token.
 2. Scroll over the image, use the slider, or enter a zero-based slice index. The fixed window is level 40 HU / width 400 HU.
 3. Click **Analyze**. The original ZIP bytes are sent to the API, not multipart data. Model masks come only from the API response.
 4. Toggle each returned structure and the separately coloured reference. All available overlays start enabled after success.
 5. Another case can be loaded while analysis is pending. The latest selection owns the screen; older results and errors cannot overwrite it.
 
-Before analysis, the app recognises the supplied ZIP by comparing its contents (SHA-256) with the bundled ZIP, independently of its filename. Matching dimensions alone never attach a reference to an unrelated scan. Repacked or changed ZIPs can still receive the reference after the API identifies them as `case-001`. The local reference stays available while analysis runs and if it fails; model overlays and Dice still require a successful analysis.
+Before analysis, the app identifies the supplied archive by the SHA-256 hash of its ZIP bytes, independently of its filename. Matching dimensions alone never attach a reference to an unrelated scan. Repacked or changed ZIPs can receive the reference after the API identifies them as `case-001`, subject to geometry validation. An attached local reference remains available during analysis and after a failed analysis; model overlays and Dice require a successful analysis.
 
 ## Code map and async design
 
@@ -61,7 +73,7 @@ mask_voxel = inverse(mask_affine) @ ct_affine @ ct_voxel
 
 Nearest-neighbour sampling preserves binary labels. Completely disjoint physical bounding boxes are rejected; out-of-mask pixels are transparent. CT and overlays are oriented together: anterior at the top, patient's right at the viewer's left. Overlays use 45% opacity; reference is drawn last.
 
-Dice compares the full 3D model `lesions` mask with the supplied reference. The structure list is dynamic; the name `lesions` only selects the mask comparable to this reference. Shapes and affines must match (absolute tolerance `1e-4`, zero relative tolerance). No resampling is used for the score.
+Dice compares the supplied reference with the first returned mask whose name is `lesions` (case-insensitive, ignoring surrounding whitespace). The structure list is dynamic; other returned masks are displayed as overlays but are not scored against this reference. Shapes and affines must match (absolute tolerance `1e-4`, zero relative tolerance). No resampling is used for the score.
 
 ```text
 Dice = 2 * intersection_voxels / (model_foreground + reference_foreground)
@@ -78,7 +90,7 @@ Both empty masks score 1; one empty mask scores 0. Grid mismatch leaves Dice una
 - Each upload has a unique local ID, even when backend case IDs match. Commit results together after all downloads/validation. Reanalysis clears old model masks/Dice, not the local reference. Separate browser guards cover selection and slice races.
 - At most two loads, analyses and renders per category concurrently. Store at most three cases; evict the oldest idle case. On new loads, remove idle cases older than 20 minutes. Busy cases are not evicted; nothing persists after exit.
 
-## Tests and verification
+## Tests and observed results
 
 After setup:
 
@@ -87,22 +99,20 @@ uv run --locked pytest -q
 node --test tests/ui_state.test.mjs
 ```
 
-Node is only needed for the JavaScript tests, not the app. Python tests cover corrupt uploads and recovery, geometry/overlay alignment, Dice edge cases, authentication/raw ZIP bodies, retries, malformed responses and out-of-order concurrent analyses. HTTP tests are mocked. The supplied-data smoke test skips when the data is absent.
+Node is only required for the JavaScript tests. The Python suite covers corrupt uploads and recovery, geometry and overlay alignment, Dice edge cases, authentication and raw ZIP requests, retries, malformed responses, reference-overlay lifecycle and concurrent analyses. HTTP tests use mocks and do not call the shared segmentation service.
 
-With the supplied data present, verification passed all 64 Python tests (including readable-error regressions, reference rendering before analysis, preservation during/after failed analysis, rejection of unrelated same-geometry scans, and layout regressions). The final source-only check passed 62 Python tests with the two supplied-data tests skipped because the downloaded data files were not in the default folder. Five JavaScript race tests and the lockfile consistency check also passed. An AST comparison confirmed that the error-message cleanup did not change non-message application code. Browser testing against the running app loaded the actual supplied ZIP, displayed CT slices and navigated between them. The empty image state was verified, and study-ID wrapping was checked at 390, 600, 1024 and 1440px widths. Earlier isolated browser checks also covered mocked concurrent selection, dynamic overlays and failed reanalysis.
+- **Python:** 64 tests passed with the supplied data available. The two supplied-data tests read the default `Take-home case-001/` directory, independently of `NUCLEO_DATA_DIR`, and require both imaging files. When the default-folder ZIP is absent, 62 tests pass and those two tests skip.
+- **JavaScript:** 5 tests passed, covering stale-response and UI-state handling.
+- **Supplied-case live result:** analysis completed with both model and reference overlays available, and a displayed 3D Dice score of **0.928**. This is a single-case result, not a general model-accuracy estimate.
 
-**Live check:** Chetan tested analysis and both overlay controls. A subsequent live run was independently observed to complete, with the model lesions and reference overlays visible and a displayed 3D Dice score of **0.928** on the supplied case. This is a result for this single case, not a general model-accuracy claim.
+## Limitations
 
-## Limitations and next steps
-
-Supported: axis-aligned axial, single-frame, uncompressed little-endian 8/16-bit CT, including in-plane rotations/flips. Oblique scans and gantry tilt/drift are rejected. Geometry cannot prove a uniformly cropped series is complete; the service decides whether it recognises the case.
+Supported: axis-aligned axial, single-frame, monochrome, uncompressed little-endian 8/16-bit CT, including in-plane rotations/flips. Overlay files must be single-file, gzip-compressed NIfTI-1/2. Oblique scans and gantry tilt/drift are rejected. Geometry cannot prove a uniformly cropped series is complete; the service decides whether it recognises the case.
 
 Unknown NIfTI units assume mm. Native-pixel PNGs do not correct nonsquare pixel aspect ratios; the supplied case has square pixels. Measurements, extra windows and deeper header-versus-API-metadata checks are omitted.
 
-Before submitting, rerun the tests and review overlay alignment and the displayed Dice score. Do not load-test the shared service. Separately prepare for the interview using the OmniLesion repository requested in the brief.
-
 ## Attribution and AI assistance
 
-Wasserthal, J. (2026). *Liver lesions CT training dataset*. Zenodo. <https://doi.org/10.5281/zenodo.20272572>. CC BY 4.0: <https://creativecommons.org/licenses/by/4.0/>. Use only the supplied public case for this assignment; synthetic test arrays are not model predictions.
+Supplied CT/reference data: Wasserthal, J. (2026). *Liver lesions CT training dataset*. Zenodo. <https://doi.org/10.5281/zenodo.20272572>. Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The data is not redistributed in this repository. Synthetic arrays are used only in tests, not as model predictions.
 
-AI tools assisted planning, implementation, review and tests. Review the code and run verification before submitting so you can explain and modify it in the interview.
+AI tools assisted with planning, implementation, code review and test development.
